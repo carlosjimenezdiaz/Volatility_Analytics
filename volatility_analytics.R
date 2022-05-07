@@ -3,7 +3,6 @@ options(scipen = 999)
 options(dplyr.summarise.inform = FALSE)
 
 # Loading the functions
-if (!require("RQuantLib")) install.packages("RQuantLib"); library(RQuantLib)
 if (!require("tidyquant")) install.packages("tidyquant"); library(tidyquant)
 if (!require("tidyverse")) install.packages("tidyverse"); library(tidyverse)
 if (!require("gridExtra")) install.packages("gridExtra"); library(gridExtra)
