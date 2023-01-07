@@ -13,7 +13,7 @@ options(dplyr.summarise.inform = FALSE)
 source(file = "00_scripts/Libraries.R")
 
 # Deleting all the files from Plots - GEX
-do.call(file.remove, list(list.files("Plots - GEX CBOE/", full.names = TRUE)))
+do.call(file.remove, list(list.files("Plots", full.names = TRUE)))
 do.call(file.remove, list(list.files("cboe_file/From Scraping//", full.names = TRUE)))
 
 # Loading the functions
@@ -170,238 +170,11 @@ for(CBOE_File in list.files("cboe_file/From Scraping/")){ # CBOE_File <- "CBOE_D
     rbind(GEX_Puts)
 }
 
-# Adjusting Strikes and Spot to the reference ticker
-acum_GEX <- acum_GEX %>%
-  dplyr::mutate(k = k * PriceRatio,
-                s = s * PriceRatio)
-
 # Selecting the Reference Price
 Reference_Price <- db_prices_from_CBOE %>% 
   dplyr::filter(Ticker == Reference_Ticker) %>%
   dplyr::select(Reference_Price) %>% 
   pull(1)
-
-# Netting GEX across all the strikes (Charts)
-p <- acum_GEX %>%
-  dplyr::select(k, GEX) %>%
-  dplyr::group_by(k) %>%
-  dplyr::filter(k > Reference_Price*0.80 & k < Reference_Price*1.20) %>%
-  dplyr::summarise(GEX_NET = sum(GEX)/1000000000) %>%
-  purrr::set_names(c("Strike", "Gamma Exposure")) %>%
-  ggplot(aes(x = Strike, y = `Gamma Exposure`)) +
-  geom_bar(stat = "identity") +
-  geom_vline(xintercept = Reference_Price, linetype = "dotted", color = "blue", size = 0.9) +
-  scale_y_continuous(labels = scales::dollar_format()) +
-  labs(title    = str_glue("Total Gamma Exposure: {dollar_format()(sum(acum_GEX$GEX)/1000000000)} Billions per 1% move in the SP500"),
-       subtitle = str_glue("Assuming dealers are long calls and short puts (considering: {Chart_label})."), 
-       caption  = "Data Source: CBOE / Own calculations.",
-       x = "Strike Price",
-       y = "Spot Gamma Exposure (Billions)") +
-  theme_minimal()
-
-p
-
-ggsave("GEX_vs_Strikes.png", plot = p, device = "png", path = "Plots - GEX CBOE/", width = 10, height = 7, units = "in") 
-
-# Getting the Put Wall and the Call Wall
-acum_GEX %>%
-  dplyr::select(k, GEX) %>%
-  dplyr::group_by(k) %>%
-  dplyr::filter(k > Reference_Price*0.80 & k < Reference_Price*1.20) %>%
-  dplyr::summarise(GEX_NET = sum(GEX)/1000000000) %>% 
-  slice_min(GEX_NET, with_ties = FALSE) -> Put_Wall
-
-acum_GEX %>%
-  dplyr::select(k, GEX) %>%
-  dplyr::group_by(k) %>%
-  dplyr::filter(k > Reference_Price*0.80 & k < Reference_Price*1.20) %>%
-  dplyr::summarise(GEX_NET = sum(GEX)/1000000000) %>% 
-  slice_max(GEX_NET, with_ties = FALSE) -> Call_Wall
-
-# GEX (Next Two Months)
-p <- acum_GEX %>%
-  dplyr::select(Date, GEX) %>%
-  dplyr::group_by(Date) %>%
-  dplyr::summarise(GEX_NET = sum(GEX)/1000000000) %>%
-  dplyr::mutate(Month = lubridate::month(Date),
-                Month_Filter = ifelse(Date <= Sys.Date() + 60, "Yes", "No")) %>%
-  dplyr::filter(Month_Filter == "Yes") %>%
-  dplyr::select(Date, GEX_NET) %>%
-  purrr::set_names(c("Date", "Gamma Exposure")) %>%
-  ggplot(aes(x = Date, y = `Gamma Exposure`)) +
-  geom_bar(stat = "identity") +
-  scale_y_continuous(labels = scales::dollar_format()) +
-  labs(title    = str_glue("Total Gamma Exposure by Expiration Date - Next Two Months"),
-       subtitle = str_glue("Assuming dealers are long calls and short puts (considering: {Chart_label})."), 
-       caption  = "Data Source: CBOE / Own calculations.",
-       x = "Expiration Date",
-       y = "Spot Gamma Exposure (Billions)") +
-  theme_minimal()
-
-p
-
-ggsave("GEX_vs_Next_Two_Months.png", plot = p, device = "png", path = "Plots - GEX CBOE/", width = 10, height = 7, units = "in") 
-
-# GEX across Strikes and option type
-p <- acum_GEX %>%
-  dplyr::select(k, type, GEX) %>%
-  dplyr::filter(k > Reference_Price*0.80 & k < Reference_Price*1.20) %>%
-  dplyr::group_by(k, type) %>%
-  dplyr::summarise(GEX_NET = sum(GEX)/1000000000) %>%
-  purrr::set_names(c("Strike", "Type", "Gamma Exposure")) %>%
-  ggplot(aes(x = Strike, y = `Gamma Exposure`, fill = Type)) +
-  geom_vline(xintercept = Reference_Price, linetype = "dotted", color = "blue", size = 0.9) +
-  geom_bar(stat = "identity") +
-  scale_fill_manual(values = c(Calls = "green", Puts = "red")) +
-  scale_y_continuous(labels = scales::dollar_format()) +
-  labs(title    = str_glue("Total Gamma Exposure: {dollar_format()(sum(acum_GEX$GEX)/1000000000)} Billions per 1% move in the SP500"),
-       subtitle = str_glue("Assuming dealers are long calls and short puts (considering: {Chart_label})."), 
-       caption  = "Data Source: CBOE / Own calculations.",
-       x = "Strike Price",
-       y = "Spot Gamma Exposure (Billions)") +
-  theme_minimal() +
-  theme(legend.title = element_blank())
-
-p
-
-ggsave("GEX_vs_Option_Types.png", plot = p, device = "png", path = "Plots - GEX CBOE/", width = 10, height = 7, units = "in") 
-
-# Calculating the Gamma Exposure Profile
-db_GEX_Profile <- NULL 
-
-for(blocks in 13:15){ # blocks <- 13
-  
-  # Filtering
-  if(blocks == 13){
-    db_Option_Chain_New <- db_Option_Chain_Combined[, 1:blocks] %>% dplyr::filter(Scenario1 == "Not This Week")
-    block_Label         <- "W/out this Week"
-  }else if(blocks == 14){
-    db_Option_Chain_New <- db_Option_Chain_Combined[, 1:blocks] %>% dplyr::filter(Scenario2 == "Not This Month")
-    block_Label         <- "W/out this Month" 
-  }else{
-    db_Option_Chain_New <- db_Option_Chain_Combined
-    block_Label         <- "All Expirations"
-  }
-  
-  # Setting the Delta in price
-  Spot_Steps <- seq(-20, 20, 0.1)
-  
-  for(new_step in Spot_Steps){ # new_step <- 0
-    
-    # GEX for the Calls
-    # CALLS
-    db_Options_Type_Subset <- db_Option_Chain_New %>% dplyr::filter(type == "Calls")
-
-    GEX_Calls <- greeks(bscall(s  = db_Options_Type_Subset$Spot_Price*(1 + new_step/100),
-                               k  = db_Options_Type_Subset$strike,
-                               v  = db_Options_Type_Subset$iv,
-                               r  = db_Options_Type_Subset$risk_free_rate,
-                               tt = db_Options_Type_Subset$days2Exp,
-                               d  = db_Options_Type_Subset$div_yield), complete = TRUE) %>%
-      dplyr::select(k, s, Gamma) %>%
-      dplyr::mutate(Date       = db_Options_Type_Subset$expiry,
-                    OI         = db_Options_Type_Subset$open_interest %>% as.numeric(),
-                    type       = "Calls",
-                    Mul        = db_Options_Type_Subset$Multiplier,
-                    PriceRatio = db_Options_Type_Subset$Price_Ratio,
-                    GEX        = +1 * Gamma * Mul * OI * s^2 * 0.01) %>%
-      dplyr::select(Date, k, s, GEX, PriceRatio, type)
-    
-    # PUTS
-    db_Options_Type_Subset <- db_Option_Chain_New %>% dplyr::filter(type == "Puts")
-    
-    GEX_Puts <- greeks(bsput(s  = db_Options_Type_Subset$Spot_Price*(1 + new_step/100),
-                             k  = db_Options_Type_Subset$strike,
-                             v  = db_Options_Type_Subset$iv,
-                             r  = db_Options_Type_Subset$risk_free_rate,
-                             tt = db_Options_Type_Subset$days2Exp,
-                             d  = db_Options_Type_Subset$div_yield), complete = TRUE) %>%
-      dplyr::select(k, s, Gamma) %>%
-      dplyr::mutate(Date       = db_Options_Type_Subset$expiry,
-                    OI         = db_Options_Type_Subset$open_interest %>% as.numeric(),
-                    type       = "Puts",
-                    Mul        = db_Options_Type_Subset$Multiplier,
-                    PriceRatio = db_Options_Type_Subset$Price_Ratio,
-                    GEX        = -1 * Gamma * Mul * OI * s^2 * 0.01) %>%
-      dplyr::select(Date, k, s, GEX, PriceRatio, type)
-    
-    # Combining all the GEX DB
-    db_GEX_Spot <- GEX_Puts %>% rbind(GEX_Calls)
-    
-    # Saving the calculations in a provisional Dataframe
-    db_GEX_Profile_prov <- data.frame(Spot_Change = new_step,
-                                      GEX         = sum(db_GEX_Spot$GEX %>% replace(is.na(.), 0)),
-                                      Expiration  = block_Label)
-    
-    # Accumulating 
-    db_GEX_Profile <- db_GEX_Profile %>% rbind(db_GEX_Profile_prov)
-  }
-}
-
-Gamma_Flip <- db_GEX_Profile %>%
-  dplyr::filter(Expiration == "All Expirations") %>%
-  dplyr::mutate(Flip = ifelse(dplyr::lead(GEX > 0) & GEX < 0, "Yes", "No")) %>%
-  dplyr::filter(Flip == "Yes") %>%
-  dplyr::select(Spot_Change) %>%
-  pull(1) %>% first()
-
-# GEX Profile applying locally weighted scatterplot smoothing (removing the noice of the calculations)
-p <- db_GEX_Profile %>%
-  dplyr::filter(Expiration == "All Expirations") %>%
-  dplyr::mutate(Spot_Change = lowess(Spot_Change, GEX, f = 1/10) %>% pluck(1),
-                GEX         = (lowess(Spot_Change, GEX, f = 1/10) %>% pluck(2))/1000000000) %>%
-  ggplot(aes(Spot_Change/100, GEX)) + 
-  geom_rect(inherit.aes = TRUE,
-            aes(xmin = -Inf, xmax = Gamma_Flip/100, ymin = -Inf, ymax = +Inf), 
-            fill = 'red', alpha = 0.005) +
-  geom_rect(inherit.aes = TRUE,
-            aes(xmin = Gamma_Flip/100, xmax = +Inf, ymin = -Inf, ymax = +Inf), 
-            fill = 'green', alpha = 0.005) +
-  geom_line(size = 1.3, colour = "black") +
-  geom_vline(xintercept = c(0, Gamma_Flip/100), linetype = c("twodash", "dotted"), color = c("steelblue", "red"), size = 0.9) +
-  geom_hline(yintercept = c(sum(acum_GEX$GEX)/1000000000, 0), linetype = c("twodash", "dotted"), color = c("steelblue", "red"), size = 0.9) +
-  labs(title    = str_glue("Gamma Exposure Profile of the SP500 - All expirations (Current GEX {dollar_format()(sum(acum_GEX$GEX)/1000000000)} Billions)."),
-       subtitle = str_glue("Gamma Flip at {round(Gamma_Flip, digits = 2)}% of current price (meaning at: {round(Reference_Price*(1+Gamma_Flip/100), digits = 2)}). Assuming dealers are long calls and short puts (considering: {Chart_label})."),
-       caption  = "Data Source: CBOE / Own calculations.",
-       x = "Change in SPX Price",
-       y = "Spot Gamma Exposure (Billions)") +
-  scale_y_continuous(labels = scales::dollar_format(),
-                     breaks = scales::pretty_breaks(n = 10)) +
-  scale_x_continuous(labels = scales::percent_format(accuracy = 1),
-                     breaks = scales::pretty_breaks(n = 10),
-                     sec.axis = sec_axis(trans = ~ . * Reference_Price + Reference_Price, name = "SPX Price", breaks = scales::pretty_breaks(n = 10))) +
-  theme(legend.title = element_blank()) + 
-  geom_vline(xintercept = (Put_Wall %>% dplyr::select(k) %>% pull(1))/Reference_Price - 1, linetype = "dotted", color = "red", size = 2.5) +
-  geom_vline(xintercept = (Call_Wall %>% dplyr::select(k) %>% pull(1))/Reference_Price - 1, linetype = "dotted", color = "blue", size = 2.5)
-
-p
-
-ggsave("GEX_Profile_All_Expirations.png", plot = p, device = "png", path = "Plots - GEX CBOE/", width = 15, height = 7, units = "in")
-
-
-# Analyzing the Impact of Different Expiration.
-p <- db_GEX_Profile %>%
-  ggplot(aes(Spot_Change/100, GEX/1000000000, group = Expiration, colour = Expiration)) + 
-  theme_minimal() +
-  geom_line(size = 1.3) +
-  scale_color_viridis(discrete = TRUE) +
-  geom_vline(xintercept = c(0, Gamma_Flip/100), linetype = c("dotted", "dotted"), color = c("steelblue", "red"), size = 0.9) +
-  geom_hline(yintercept = c(sum(acum_GEX$GEX)/1000000000, 0), linetype = c("dotted", "dotted"), color = c("steelblue", "red"), size = 0.9) +
-  labs(title    = str_glue("Gamma Exposure Profile of the SP500. Analyzing different Scenarios (Current GEX {dollar_format()(sum(acum_GEX$GEX)/1000000000)} Billions)."),
-       subtitle = str_glue("Gamma Flip at {round(Gamma_Flip, digits = 2)}% of current price (meaning at: {round(Reference_Price*(1+Gamma_Flip/100), digits = 2)}). Assuming dealers are long calls and short puts (considering: {Chart_label})."),
-       caption  = "Data Source: CBOE / Own calculations.",
-       x = "Change in SPX Price",
-       y = "Spot Gamma Exposure (Billions)") +
-  scale_y_continuous(labels = scales::dollar_format(),
-                     breaks = scales::pretty_breaks(n = 10)) +
-  scale_x_continuous(labels = scales::percent_format(accuracy = 1),
-                     breaks = scales::pretty_breaks(n = 10),
-                     sec.axis = sec_axis(trans = ~ . * Reference_Price + Reference_Price, name = "SPX Price", breaks = scales::pretty_breaks(n = 10))) +
-  theme(legend.title = element_blank())  
-
-p
-
-ggsave("GEX_Profile_Scenarios.png", plot = p, device = "png", path = "Plots - GEX CBOE/", width = 15, height = 7, units = "in") 
 
 # Extracting the VIX Structure from the Option Chain
 MMS_First_Criteria  <- 0.95    # Moneyness criteria for the Implied Volatility Structure
@@ -441,7 +214,7 @@ p <- db_Option_Chain_Combined %>%
 
 p
 
-ggsave("vix_structure.png", plot = p, path = "Plots - GEX CBOE/", width = 10, height = 7, units = "in") 
+ggsave("vix_structure.png", plot = p, path = "Plots/", width = 10, height = 7, units = "in") 
 
 # Stoping the Timer
 tictoc::toc()
