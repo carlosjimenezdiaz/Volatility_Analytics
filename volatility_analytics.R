@@ -81,3 +81,32 @@ grid.arrange(p_volatilites, arrangeGrob(p_spread, p_vix, ncol=2), nrow = 2)
 
 ggsave("VIX_Analysis.png", plot = grid.arrange(p_volatilites, arrangeGrob(p_spread, p_vix, ncol=2), nrow = 2), path = "Plots/", width = 10, height = 7, units = "in") 
 
+# Getting the Averages plus historical data of the SPX
+tq_get("^VIX",
+       from = Sys.Date() - lubridate::years(100),
+       to   = Sys.Date(),
+       get  = "stock.prices",
+       complete_cases = TRUE) %>%
+  dplyr::select(date, adjusted) %>%
+  dplyr::mutate(Year = date %>% lubridate::year()) %>%
+  group_by(Year) %>%
+  summarise(mean = mean(adjusted), n = n()) %>%
+  ggplot(aes(x = Year, y = mean)) +
+  geom_bar(stat = "identity") +
+  labs(title    = "Implied Volatility - Mean Values",
+       subtitle = "Data extracted from Yahoo Finance",
+       caption  = "Own calculations.",
+       x        = "Years",
+       y        = "Implied Volatility") +
+  theme(legend.title = element_blank(),
+        legend.position = "none")
+
+tq_get("SPY",
+       from = Sys.Date() - lubridate::years(100),
+       to   = Sys.Date(),
+       get  = "stock.prices",
+       complete_cases = TRUE) %>%
+  dplyr::select(date, adjusted) %>%
+  as.xts()
+  yearlyReturn()
+
